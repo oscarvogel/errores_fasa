@@ -20,9 +20,23 @@ class Settings(BaseSettings):
     db_charset: str = "utf8mb4"
 
     error_table: str = "sys_errores"
-    error_id_column: str = "id"
+    error_id_column: str = "id_error"
+    branches_table: str = "sucursales"
 
-    @field_validator("error_table", "error_id_column")
+    # Credenciales comunes para leer los MySQL de las sucursales.
+    # El host/puerto se obtiene de la tabla `sucursales`.
+    remote_db_name: str = "fasa"
+    remote_db_user: str = "error_dashboard"
+    remote_db_password: str = ""
+    remote_db_charset: str = "utf8mb4"
+    remote_error_table: str = "sys_errores"
+    remote_connect_timeout: int = 8
+    sync_batch_size: int = 1000
+
+    # Cache local de errores remotos. No escribe en el MySQL de producción.
+    sync_db_path: str = "/data/sync.db"
+
+    @field_validator("error_table", "error_id_column", "branches_table", "remote_error_table")
     @classmethod
     def validate_sql_identifier(cls, value: str) -> str:
         if not fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
