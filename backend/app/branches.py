@@ -62,3 +62,18 @@ def sync_branch_endpoint(branch_id: int, db: Session = Depends(get_db)):
             status_code=502,
             detail=f"No se pudo sincronizar {str(branch['nombre']).strip()}: {exc}",
         )
+
+
+@router.get("/branches/{branch_id}/errors")
+def branch_errors(branch_id: int, db: Session = Depends(get_db)):
+    _get_branch(db, branch_id)
+    rows = db.execute(
+        text(
+            f"SELECT `{settings.error_id_column}` AS _id, t.* "
+            f"FROM `{settings.error_table}` t "
+            "WHERE sincronizado = 1 AND id_sucursal_origen = :branch_id "
+            f"ORDER BY fecha_hora DESC, `{settings.error_id_column}` DESC"
+        ),
+        {"branch_id": branch_id},
+    ).mappings().all()
+    return {"items": [dict(row) for row in rows], "total": len(rows)}
