@@ -14,7 +14,7 @@ from .database import engine, get_db
 settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0",
+    version="0.3.0",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
@@ -41,14 +41,39 @@ TOP_FIELDS = {
     "objeto": "objeto",
 }
 
+GROUP_MODES = {
+    "error": ("nro_error", "CAST(nro_error AS CHAR)"),
+    "formulario": ("formulario", "COALESCE(NULLIF(TRIM(formulario), ''), '(sin formulario)')"),
+    "metodo": ("metodo", "COALESCE(NULLIF(TRIM(metodo), ''), '(sin método)')"),
+    "firma": (
+        "firma",
+        "CONCAT(COALESCE(CAST(nro_error AS CHAR), '-'), ' · ', "
+        "COALESCE(NULLIF(TRIM(formulario), ''), '(sin formulario)'), ' · ', "
+        "COALESCE(NULLIF(TRIM(metodo), ''), '(sin método)'))",
+    ),
+}
+
 
 def rows_to_dicts(result):
     return [dict(row._mapping) for row in result]
 
 
+def origin_filter(branch_id: int, alias: str = ""):
+    prefix = f"{alias}." if alias else ""
+    if branch_id == 0:
+        return f"{prefix}id_sucursal_origen IS NULL", {}
+    if branch_id > 0:
+        return f"{prefix}id_sucursal_origen = :branch_id", {"branch_id": branch_id}
+    return "", {}
+
+
 def build_filters(*, desde=None, hasta=None, nro_error=None, metodo=None, formulario=None,
-                  usuario=None, maquina=None, version=None, q=None):
+                  usuario=None, maquina=None, version=None, q=None, branch_id=-1):
     clauses, params = [], {}
+    origin, origin_params = origin_filter(branch_id)
+    if origin:
+        clauses.append(origin)
+        params.update(origin_params)
     if desde:
         clauses.append("fecha_hora >= :desde")
         params["desde"] = datetime.combine(desde, datetime.min.time())
@@ -98,6 +123,7 @@ def list_errors(
     db: DbSession,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    branch_id: int = Query(-1, ge=-1),
     desde: date | None = None,
     hasta: date | None = None,
     nro_error: int | None = None,
@@ -110,7 +136,8 @@ def list_errors(
 ):
     where, params = build_filters(
         desde=desde, hasta=hasta, nro_error=nro_error, metodo=metodo,
-        formulario=formulario, usuario=usuario, maquina=maquina, version=version, q=q,
+        formulario=formulario, usuario=usuario, maquina=maquina, version=version,
+        q=q, branch_id=branch_id,
     )
     total = db.execute(text(f"SELECT COUNT(*) FROM `{TABLE}`{where}"), params).scalar_one()
     params.update({"limit": page_size, "offset": (page - 1) * page_size})
@@ -137,8 +164,18 @@ def get_error(error_id: int, db: DbSession):
 
 
 @app.get("/api/dashboard/summary")
-def dashboard_summary(db: DbSession, days: int = Query(30, ge=1, le=3650)):
+def dashboard_summary(
+    db: DbSession,
+    days: int = Query(30, ge=1, le=3650),
+    branch_id: int = Query(-1, ge=-1),
+):
     since = datetime.now() - timedelta(days=days)
+    origin, origin_params = origin_filter(branch_id)
+    clauses = ["fecha_hora >= :since"]
+    if origin:
+        clauses.append(origin)
+    params = {"since": since, **origin_params}
+    where = " WHERE " + " AND ".join(clauses)
     row = db.execute(text(f"""
         SELECT COUNT(*) AS total,
                SUM(fecha_hora >= CURDATE()) AS hoy,
@@ -146,27 +183,38 @@ def dashboard_summary(db: DbSession, days: int = Query(30, ge=1, le=3650)):
                COUNT(DISTINCT maquina) AS equipos,
                COUNT(DISTINCT usuario) AS usuarios,
                MAX(fecha_hora) AS ultimo_error
-        FROM `{TABLE}` WHERE fecha_hora >= :since
-    """), {"since": since}).first()
+        FROM `{TABLE}`{where}
+    """), params).first()
+
+    version_clauses = ["version_sistema IS NOT NULL", "version_sistema <> ''"]
+    if origin:
+        version_clauses.append(origin)
     latest_version = db.execute(text(
-        f"SELECT version_sistema FROM `{TABLE}` "
-        "WHERE version_sistema IS NOT NULL AND version_sistema <> '' "
+        f"SELECT version_sistema FROM `{TABLE}` WHERE {' AND '.join(version_clauses)} "
         "ORDER BY fecha_hora DESC LIMIT 1"
-    )).scalar()
+    ), origin_params).scalar()
     result = dict(row._mapping) if row else {}
-    result.update({"version_actual": latest_version, "days": days})
+    result.update({"version_actual": latest_version, "days": days, "branch_id": branch_id})
     return result
 
 
 @app.get("/api/dashboard/timeline")
-def dashboard_timeline(db: DbSession, days: int = Query(30, ge=1, le=365)):
+def dashboard_timeline(
+    db: DbSession,
+    days: int = Query(30, ge=1, le=365),
+    branch_id: int = Query(-1, ge=-1),
+):
     since = (datetime.now() - timedelta(days=days - 1)).date()
+    origin, origin_params = origin_filter(branch_id)
+    clauses = ["fecha_hora >= :since"]
+    if origin:
+        clauses.append(origin)
     rows = db.execute(text(f"""
         SELECT DATE(fecha_hora) AS fecha, COUNT(*) AS cantidad
-        FROM `{TABLE}` WHERE fecha_hora >= :since
+        FROM `{TABLE}` WHERE {' AND '.join(clauses)}
         GROUP BY DATE(fecha_hora) ORDER BY fecha ASC
-    """), {"since": since})
-    return {"items": rows_to_dicts(rows), "days": days}
+    """), {"since": since, **origin_params})
+    return {"items": rows_to_dicts(rows), "days": days, "branch_id": branch_id}
 
 
 @app.get("/api/dashboard/top")
@@ -175,19 +223,61 @@ def dashboard_top(
     field: str = Query("nro_error"),
     days: int = Query(30, ge=1, le=3650),
     limit: int = Query(10, ge=1, le=50),
+    branch_id: int = Query(-1, ge=-1),
 ):
     column = TOP_FIELDS.get(field)
     if not column:
         raise HTTPException(status_code=400, detail=f"Campo inválido. Opciones: {', '.join(TOP_FIELDS)}")
     since = datetime.now() - timedelta(days=days)
+    origin, origin_params = origin_filter(branch_id)
+    clauses = ["fecha_hora >= :since", f"`{column}` IS NOT NULL", f"CAST(`{column}` AS CHAR) <> ''"]
+    if origin:
+        clauses.append(origin)
     rows = db.execute(text(f"""
         SELECT `{column}` AS valor, COUNT(*) AS cantidad, MAX(fecha_hora) AS ultimo
         FROM `{TABLE}`
-        WHERE fecha_hora >= :since AND `{column}` IS NOT NULL
-          AND CAST(`{column}` AS CHAR) <> ''
+        WHERE {' AND '.join(clauses)}
         GROUP BY `{column}` ORDER BY cantidad DESC LIMIT :limit
-    """), {"since": since, "limit": limit})
-    return {"field": field, "items": rows_to_dicts(rows)}
+    """), {"since": since, "limit": limit, **origin_params})
+    return {"field": field, "items": rows_to_dicts(rows), "branch_id": branch_id}
+
+
+@app.get("/api/dashboard/repeated")
+def dashboard_repeated(
+    db: DbSession,
+    group_by: str = Query("firma"),
+    days: int = Query(30, ge=1, le=3650),
+    limit: int = Query(20, ge=1, le=100),
+    branch_id: int = Query(-1, ge=-1),
+):
+    mode = GROUP_MODES.get(group_by)
+    if not mode:
+        raise HTTPException(status_code=400, detail="Agrupación inválida")
+    _, expression = mode
+    since = datetime.now() - timedelta(days=days)
+    origin, origin_params = origin_filter(branch_id, "e")
+    clauses = ["e.fecha_hora >= :since"]
+    if origin:
+        clauses.append(origin)
+
+    rows = db.execute(text(f"""
+        SELECT
+            {expression} AS grupo,
+            COUNT(*) AS cantidad,
+            COUNT(DISTINCT COALESCE(e.id_sucursal_origen, 0)) AS sucursales,
+            MIN(e.fecha_hora) AS primero,
+            MAX(e.fecha_hora) AS ultimo,
+            MAX(e.mensaje) AS mensaje_ejemplo,
+            GROUP_CONCAT(DISTINCT COALESCE(s.nombre, 'Casa Central') ORDER BY COALESCE(s.nombre, 'Casa Central') SEPARATOR ', ') AS origenes
+        FROM `{TABLE}` e
+        LEFT JOIN `{settings.branches_table}` s ON s.id_sucursal = e.id_sucursal_origen
+        WHERE {' AND '.join(clauses)}
+        GROUP BY {expression}
+        HAVING COUNT(*) > 1
+        ORDER BY cantidad DESC, ultimo DESC
+        LIMIT :limit
+    """), {"since": since, "limit": limit, **origin_params})
+    return {"group_by": group_by, "items": rows_to_dicts(rows), "branch_id": branch_id}
 
 
 @app.get("/api/dashboard/versions")
