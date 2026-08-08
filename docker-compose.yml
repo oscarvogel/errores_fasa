@@ -1,0 +1,26 @@
+services:
+  api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-America/Argentina/Buenos_Aires}
+    networks:
+      - error_monitor
+
+  web:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:${APP_PORT:-8088}:80"
+    networks:
+      - error_monitor
+
+networks:
+  error_monitor:
+    driver: bridge
