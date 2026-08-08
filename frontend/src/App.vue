@@ -63,7 +63,7 @@ async function loadBranches() {
 
 function applyPatternToQuery(query) {
   if (!activePattern.value) return
-  const { mode, nro_error, formulario, metodo } = activePattern.value
+  const { mode, nro_error, formulario, metodo, usuario } = activePattern.value
 
   if ((mode === 'error' || mode === 'firma') && nro_error !== null && nro_error !== undefined) {
     query.set('nro_error', String(nro_error))
@@ -73,6 +73,9 @@ function applyPatternToQuery(query) {
   }
   if ((mode === 'metodo' || mode === 'firma') && metodo) {
     query.set('metodo', metodo)
+  }
+  if (mode === 'usuario' && usuario) {
+    query.set('usuario', usuario)
   }
 }
 
@@ -194,6 +197,7 @@ async function filterByPattern(item) {
     nro_error: null,
     formulario: '',
     metodo: '',
+    usuario: '',
   }
 
   if (groupMode.value === 'error') {
@@ -202,6 +206,8 @@ async function filterByPattern(item) {
     pattern.formulario = item.grupo === '(sin formulario)' ? '' : item.grupo
   } else if (groupMode.value === 'metodo') {
     pattern.metodo = item.grupo === '(sin método)' ? '' : item.grupo
+  } else if (groupMode.value === 'usuario') {
+    pattern.usuario = item.grupo === '(sin usuario)' ? '' : item.grupo
   } else if (groupMode.value === 'firma') {
     const parts = String(item.grupo).split(' · ')
     pattern.nro_error = parts[0] && parts[0] !== '-' ? Number(parts[0]) : null
@@ -321,6 +327,7 @@ onMounted(async () => {
           <option value="error">Número de error</option>
           <option value="formulario">Formulario</option>
           <option value="metodo">Método</option>
+          <option value="usuario">Usuario</option>
         </select>
       </div>
       <div class="table-scroll">
