@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .database import engine, get_db
 
-
 settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
@@ -18,7 +17,6 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -30,17 +28,6 @@ app.add_middleware(
 DbSession = Annotated[Session, Depends(get_db)]
 TABLE = settings.error_table
 ID = settings.error_id_column
-
-FILTERABLE_FIELDS = {
-    "nro_error": "nro_error",
-    "metodo": "metodo",
-    "formulario": "formulario",
-    "control": "control",
-    "usuario": "usuario",
-    "maquina": "maquina",
-    "version_sistema": "version_sistema",
-    "objeto": "objeto",
-}
 
 TOP_FIELDS = {
     "nro_error": "nro_error",
@@ -57,21 +44,9 @@ def rows_to_dicts(result):
     return [dict(row._mapping) for row in result]
 
 
-def build_filters(
-    *,
-    desde: date | None = None,
-    hasta: date | None = None,
-    nro_error: int | None = None,
-    metodo: str | None = None,
-    formulario: str | None = None,
-    usuario: str | None = None,
-    maquina: str | None = None,
-    version: str | None = None,
-    q: str | None = None,
-):
-    clauses: list[str] = []
-    params: dict = {}
-
+def build_filters(*, desde=None, hasta=None, nro_error=None, metodo=None, formulario=None,
+                  usuario=None, maquina=None, version=None, q=None):
+    clauses, params = [], {}
     if desde:
         clauses.append("fecha_hora >= :desde")
         params["desde"] = datetime.combine(desde, datetime.min.time())
@@ -81,18 +56,15 @@ def build_filters(
     if nro_error is not None:
         clauses.append("nro_error = :nro_error")
         params["nro_error"] = nro_error
-    if metodo:
-        clauses.append("metodo LIKE :metodo")
-        params["metodo"] = f"%{metodo}%"
-    if formulario:
-        clauses.append("formulario LIKE :formulario")
-        params["formulario"] = f"%{formulario}%"
-    if usuario:
-        clauses.append("usuario LIKE :usuario")
-        params["usuario"] = f"%{usuario}%"
-    if maquina:
-        clauses.append("maquina LIKE :maquina")
-        params["maquina"] = f"%{maquina}%"
+    for name, value, column in [
+        ("metodo", metodo, "metodo"),
+        ("formulario", formulario, "formulario"),
+        ("usuario", usuario, "usuario"),
+        ("maquina", maquina, "maquina"),
+    ]:
+        if value:
+            clauses.append(f"`{column}` LIKE :{name}")
+            params[name] = f"%{value}%"
     if version:
         clauses.append("version_sistema = :version")
         params["version"] = version
@@ -102,9 +74,7 @@ def build_filters(
             "codigo_fuente, call_stack, info_extra) LIKE :q"
         )
         params["q"] = f"%{q}%"
-
-    where = " WHERE " + " AND ".join(clauses) if clauses else ""
-    return where, params
+    return (" WHERE " + " AND ".join(clauses) if clauses else ""), params
 
 
 @app.get("/api/health")
@@ -112,17 +82,10 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-            columns = [
-                row[0]
-                for row in conn.execute(text(f"SHOW COLUMNS FROM `{TABLE}`"))
-            ]
+            columns = [row[0] for row in conn.execute(text(f"SHOW COLUMNS FROM `{TABLE}`"))]
         return {
-            "status": "ok",
-            "database": "ok",
-            "table": TABLE,
-            "id_column": ID,
-            "id_column_found": ID in columns,
-            "columns": columns,
+            "status": "ok", "database": "ok", "table": TABLE,
+            "id_column": ID, "id_column_found": ID in columns, "columns": columns,
         }
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail=f"Base de datos no disponible: {exc.__class__.__name__}")
@@ -144,29 +107,17 @@ def list_errors(
     q: str | None = None,
 ):
     where, params = build_filters(
-        desde=desde,
-        hasta=hasta,
-        nro_error=nro_error,
-        metodo=metodo,
-        formulario=formulario,
-        usuario=usuario,
-        maquina=maquina,
-        version=version,
-        q=q,
+        desde=desde, hasta=hasta, nro_error=nro_error, metodo=metodo,
+        formulario=formulario, usuario=usuario, maquina=maquina, version=version, q=q,
     )
-
-    total_sql = text(f"SELECT COUNT(*) AS total FROM `{TABLE}`{where}")
-    total = db.execute(total_sql, params).scalar_one()
-
+    total = db.execute(text(f"SELECT COUNT(*) FROM `{TABLE}`{where}"), params).scalar_one()
     params.update({"limit": page_size, "offset": (page - 1) * page_size})
     data_sql = text(
-        f"SELECT * FROM `{TABLE}`{where} "
+        f"SELECT `{ID}` AS _id, t.* FROM `{TABLE}` t{where} "
         f"ORDER BY fecha_hora DESC, `{ID}` DESC LIMIT :limit OFFSET :offset"
     )
-    items = rows_to_dicts(db.execute(data_sql, params))
-
     return {
-        "items": items,
+        "items": rows_to_dicts(db.execute(data_sql, params)),
         "page": page,
         "page_size": page_size,
         "total": total,
@@ -176,7 +127,7 @@ def list_errors(
 
 @app.get("/api/errors/{error_id}")
 def get_error(error_id: int, db: DbSession):
-    sql = text(f"SELECT * FROM `{TABLE}` WHERE `{ID}` = :error_id LIMIT 1")
+    sql = text(f"SELECT `{ID}` AS _id, t.* FROM `{TABLE}` t WHERE `{ID}` = :error_id LIMIT 1")
     row = db.execute(sql, {"error_id": error_id}).first()
     if not row:
         raise HTTPException(status_code=404, detail="Error no encontrado")
@@ -184,57 +135,36 @@ def get_error(error_id: int, db: DbSession):
 
 
 @app.get("/api/dashboard/summary")
-def dashboard_summary(
-    db: DbSession,
-    days: int = Query(30, ge=1, le=3650),
-):
+def dashboard_summary(db: DbSession, days: int = Query(30, ge=1, le=3650)):
     since = datetime.now() - timedelta(days=days)
-    sql = text(
-        f"""
-        SELECT
-            COUNT(*) AS total,
-            SUM(fecha_hora >= CURDATE()) AS hoy,
-            COUNT(DISTINCT nro_error) AS tipos_error,
-            COUNT(DISTINCT maquina) AS equipos,
-            COUNT(DISTINCT usuario) AS usuarios,
-            MAX(fecha_hora) AS ultimo_error
-        FROM `{TABLE}`
-        WHERE fecha_hora >= :since
-        """
-    )
-    row = db.execute(sql, {"since": since}).first()
-
-    latest_version = db.execute(
-        text(
-            f"SELECT version_sistema FROM `{TABLE}` "
-            "WHERE version_sistema IS NOT NULL AND version_sistema <> '' "
-            "ORDER BY fecha_hora DESC LIMIT 1"
-        )
-    ).scalar()
-
+    row = db.execute(text(f"""
+        SELECT COUNT(*) AS total,
+               SUM(fecha_hora >= CURDATE()) AS hoy,
+               COUNT(DISTINCT nro_error) AS tipos_error,
+               COUNT(DISTINCT maquina) AS equipos,
+               COUNT(DISTINCT usuario) AS usuarios,
+               MAX(fecha_hora) AS ultimo_error
+        FROM `{TABLE}` WHERE fecha_hora >= :since
+    """), {"since": since}).first()
+    latest_version = db.execute(text(
+        f"SELECT version_sistema FROM `{TABLE}` "
+        "WHERE version_sistema IS NOT NULL AND version_sistema <> '' "
+        "ORDER BY fecha_hora DESC LIMIT 1"
+    )).scalar()
     result = dict(row._mapping) if row else {}
-    result["version_actual"] = latest_version
-    result["days"] = days
+    result.update({"version_actual": latest_version, "days": days})
     return result
 
 
 @app.get("/api/dashboard/timeline")
-def dashboard_timeline(
-    db: DbSession,
-    days: int = Query(30, ge=1, le=365),
-):
+def dashboard_timeline(db: DbSession, days: int = Query(30, ge=1, le=365)):
     since = (datetime.now() - timedelta(days=days - 1)).date()
-    sql = text(
-        f"""
+    rows = db.execute(text(f"""
         SELECT DATE(fecha_hora) AS fecha, COUNT(*) AS cantidad
-        FROM `{TABLE}`
-        WHERE fecha_hora >= :since
-        GROUP BY DATE(fecha_hora)
-        ORDER BY fecha ASC
-        """
-    )
-    rows = rows_to_dicts(db.execute(sql, {"since": since}))
-    return {"items": rows, "days": days}
+        FROM `{TABLE}` WHERE fecha_hora >= :since
+        GROUP BY DATE(fecha_hora) ORDER BY fecha ASC
+    """), {"since": since})
+    return {"items": rows_to_dicts(rows), "days": days}
 
 
 @app.get("/api/dashboard/top")
@@ -247,40 +177,24 @@ def dashboard_top(
     column = TOP_FIELDS.get(field)
     if not column:
         raise HTTPException(status_code=400, detail=f"Campo inválido. Opciones: {', '.join(TOP_FIELDS)}")
-
     since = datetime.now() - timedelta(days=days)
-    sql = text(
-        f"""
+    rows = db.execute(text(f"""
         SELECT `{column}` AS valor, COUNT(*) AS cantidad, MAX(fecha_hora) AS ultimo
         FROM `{TABLE}`
-        WHERE fecha_hora >= :since
-          AND `{column}` IS NOT NULL
+        WHERE fecha_hora >= :since AND `{column}` IS NOT NULL
           AND CAST(`{column}` AS CHAR) <> ''
-        GROUP BY `{column}`
-        ORDER BY cantidad DESC
-        LIMIT :limit
-        """
-    )
-    return {
-        "field": field,
-        "items": rows_to_dicts(db.execute(sql, {"since": since, "limit": limit})),
-    }
+        GROUP BY `{column}` ORDER BY cantidad DESC LIMIT :limit
+    """), {"since": since, "limit": limit})
+    return {"field": field, "items": rows_to_dicts(rows)}
 
 
 @app.get("/api/dashboard/versions")
-def dashboard_versions(
-    db: DbSession,
-    limit: int = Query(15, ge=1, le=100),
-):
-    sql = text(
-        f"""
+def dashboard_versions(db: DbSession, limit: int = Query(15, ge=1, le=100)):
+    rows = db.execute(text(f"""
         SELECT version_sistema AS version, COUNT(*) AS cantidad,
                MIN(fecha_hora) AS primero, MAX(fecha_hora) AS ultimo
         FROM `{TABLE}`
         WHERE version_sistema IS NOT NULL AND version_sistema <> ''
-        GROUP BY version_sistema
-        ORDER BY ultimo DESC
-        LIMIT :limit
-        """
-    )
-    return {"items": rows_to_dicts(db.execute(sql, {"limit": limit}))}
+        GROUP BY version_sistema ORDER BY ultimo DESC LIMIT :limit
+    """), {"limit": limit})
+    return {"items": rows_to_dicts(rows)}
