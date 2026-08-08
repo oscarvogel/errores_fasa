@@ -66,6 +66,13 @@ td small { display: block; color: #94a3b8; margin-top: 3px; }
 .analysis-table td:first-child { max-width: 560px; }
 .analysis-table td:first-child strong { display: block; overflow-wrap: anywhere; }
 .analysis-table td:first-child small { max-width: 720px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pattern-row { cursor: pointer; }
+.pattern-row:hover { background: rgba(37,99,235,.13); }
+.pattern-row.selected { background: rgba(37,99,235,.2); box-shadow: inset 3px 0 0 #60a5fa; }
+.errors-panel { scroll-margin-top: 18px; }
+.active-filter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 9px 11px; border: 1px solid rgba(96,165,250,.25); border-radius: 10px; background: rgba(37,99,235,.1); color: #bfdbfe; font-size: .8rem; }
+.active-filter strong { color: #fff; }
+.filter-clear { padding: 5px 9px; border: 1px solid rgba(148,163,184,.25); background: #172033; font-size: .75rem; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(2,6,23,.82); backdrop-filter: blur(5px); }
 .modal { width: min(1050px, 100%); max-height: 92vh; overflow: auto; border: 1px solid #263449; border-radius: 18px; background: #0b1220; box-shadow: 0 30px 90px rgba(0,0,0,.55); }
