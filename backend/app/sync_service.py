@@ -32,7 +32,11 @@ def sync_branch(branch: dict) -> dict:
     if not host:
         raise ValueError(f"La sucursal {branch_name} no tiene servidor configurado")
 
-    last_id = get_last_remote_id(branch_id)
+    last_remote_id = get_last_remote_id(branch_id)
+    initial_last_id = last_remote_id
+    total_fetched = 0
+    total_imported = 0
+
     engine = create_engine(
         _remote_url(host, port),
         pool_pre_ping=True,
@@ -42,26 +46,35 @@ def sync_branch(branch: dict) -> dict:
 
     try:
         with engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    f"SELECT * FROM `{settings.remote_error_table}` "
-                    "WHERE id_error > :last_id ORDER BY id_error ASC LIMIT :batch_size"
-                ),
-                {"last_id": last_id, "batch_size": settings.sync_batch_size},
-            ).mappings().all()
+            while True:
+                rows = conn.execute(
+                    text(
+                        f"SELECT * FROM `{settings.remote_error_table}` "
+                        "WHERE id_error > :last_id ORDER BY id_error ASC LIMIT :batch_size"
+                    ),
+                    {"last_id": last_remote_id, "batch_size": settings.sync_batch_size},
+                ).mappings().all()
 
-        data = [dict(row) for row in rows]
-        imported = save_remote_errors(branch_id, branch_name, data)
-        last_remote_id = max([last_id] + [int(row["id_error"]) for row in data])
-        mark_sync_success(branch_id, branch_name, last_remote_id, imported)
+                if not rows:
+                    break
+
+                data = [dict(row) for row in rows]
+                total_fetched += len(data)
+                total_imported += save_remote_errors(branch_id, branch_name, data)
+                last_remote_id = max(int(row["id_error"]) for row in data)
+
+                if len(data) < settings.sync_batch_size:
+                    break
+
+        mark_sync_success(branch_id, branch_name, last_remote_id, total_imported)
         return {
             "status": "ok",
             "branch_id": branch_id,
             "branch": branch_name,
-            "imported": imported,
-            "fetched": len(data),
+            "imported": total_imported,
+            "fetched": total_fetched,
+            "previous_last_remote_id": initial_last_id,
             "last_remote_id": last_remote_id,
-            "has_more": len(data) >= settings.sync_batch_size,
         }
     except (SQLAlchemyError, OSError, ValueError) as exc:
         mark_sync_error(branch_id, branch_name, str(exc))
