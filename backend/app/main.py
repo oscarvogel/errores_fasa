@@ -14,7 +14,7 @@ from .database import engine, get_db
 settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
-    version="0.3.0",
+    version="0.3.1",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
@@ -45,6 +45,7 @@ GROUP_MODES = {
     "error": ("nro_error", "CAST(nro_error AS CHAR)"),
     "formulario": ("formulario", "COALESCE(NULLIF(TRIM(formulario), ''), '(sin formulario)')"),
     "metodo": ("metodo", "COALESCE(NULLIF(TRIM(metodo), ''), '(sin método)')"),
+    "usuario": ("usuario", "COALESCE(NULLIF(TRIM(usuario), ''), '(sin usuario)')"),
     "firma": (
         "firma",
         "CONCAT(COALESCE(CAST(nro_error AS CHAR), '-'), ' · ', "
