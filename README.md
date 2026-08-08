@@ -7,8 +7,9 @@ Dashboard interno para consultar y analizar los errores registrados por Visual F
 - FastAPI + SQLAlchemy
 - Vue 3 + Vite + Chart.js
 - Docker Compose
-- Nginx (contenedor web) detrás del Nginx del servidor
-- MySQL existente de FASA (solo lectura)
+- Nginx dentro del contenedor web
+- Nginx del servidor como reverse proxy
+- MySQL existente de FASA, idealmente con usuario de solo lectura
 
 ## Puesta en marcha
 
@@ -21,7 +22,14 @@ Dashboard interno para consultar y analizar los errores registrados por Visual F
 docker compose up -d --build
 ```
 
-5. Abrir `http://IP_SERVIDOR:8088` o configurar el Nginx del host usando `deploy/nginx-host.conf.example`.
+5. El stack queda escuchando solo en `127.0.0.1:8088` del servidor, para no exponerlo directamente a la red.
+6. Configurar el Nginx del host usando `deploy/nginx-host.conf.example`.
+
+Para verificarlo directamente desde el servidor:
+
+```bash
+curl http://127.0.0.1:8088/api/health
+```
 
 ## Configuración
 
@@ -65,8 +73,48 @@ FLUSH PRIVILEGES;
 - `GET /api/dashboard/summary`
 - `GET /api/dashboard/timeline`
 - `GET /api/dashboard/top?field=nro_error`
+- `GET /api/dashboard/versions`
 
-FastAPI también expone documentación en `/api/docs`.
+FastAPI expone documentación en `/api/docs`.
+
+## Filtros de errores
+
+`GET /api/errors` acepta:
+
+- `page`
+- `page_size`
+- `desde`
+- `hasta`
+- `nro_error`
+- `metodo`
+- `formulario`
+- `usuario`
+- `maquina`
+- `version`
+- `q` para búsqueda general
+
+Ejemplo:
+
+```text
+/api/errors?desde=2026-08-01&version=3.0.292&q=btnsalir
+```
+
+## Diagnóstico inicial
+
+Después del primer arranque ejecutar:
+
+```bash
+curl http://127.0.0.1:8088/api/health
+```
+
+Además de comprobar MySQL, devuelve las columnas detectadas y confirma si `ERROR_ID_COLUMN` existe.
+
+Ver logs:
+
+```bash
+docker compose logs -f api
+docker compose logs -f web
+```
 
 ## Desarrollo local
 
