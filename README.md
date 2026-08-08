@@ -44,11 +44,11 @@ DB_NAME=fasa
 DB_USER=error_dashboard
 DB_PASSWORD=cambiar
 ERROR_TABLE=sys_errores
-ERROR_ID_COLUMN=id
+ERROR_ID_COLUMN=id_error
 APP_PORT=8088
 ```
 
-Si la clave primaria de `sys_errores` no se llama `id`, cambiar `ERROR_ID_COLUMN` por el nombre real.
+La estructura actual de FASA usa `id_error` como clave primaria de `sys_errores`.
 
 ### Usuario MySQL recomendado
 
@@ -64,6 +64,12 @@ TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
 
 FLUSH PRIVILEGES;
 ```
+
+## Tabla soportada
+
+El dashboard está preparado para la tabla actual `sys_errores`, incluyendo los campos de diagnóstico (`call_stack`, `codigo_fuente`, `tablas_abiertas`, `sql_state`, versiones, formulario/control) y también los campos de seguimiento ya existentes: `estado`, `resuelto_por`, `fecha_resol` y `solucion`.
+
+La primera versión del dashboard es de consulta. Para permitir marcar errores como resueltos desde la web habrá que habilitar permisos de escritura específicos y endpoints separados; no se recomienda dar permisos amplios al usuario de lectura.
 
 ## Endpoints
 
