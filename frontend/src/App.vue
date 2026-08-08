@@ -13,6 +13,7 @@ const errors = ref({ items: [], page: 1, pages: 1, total: 0 })
 const topErrors = ref([])
 const repeated = ref([])
 const groupMode = ref('firma')
+const activePattern = ref(null)
 const timeline = ref([])
 const selected = ref(null)
 const page = ref(1)
@@ -20,6 +21,7 @@ const q = ref('')
 const days = ref(30)
 const timelineCanvas = ref(null)
 const topCanvas = ref(null)
+const errorsPanel = ref(null)
 let timelineChart
 let topChart
 
@@ -48,6 +50,7 @@ const displayValue = (value) => {
 const pageLabel = computed(() => `${errors.value.page} / ${errors.value.pages}`)
 const currentBranch = computed(() => branches.value.find((item) => item.id_sucursal === branchId.value))
 const currentBranchName = computed(() => currentBranch.value?.nombre || 'Todas')
+const activePatternLabel = computed(() => activePattern.value?.label || '')
 
 async function loadBranches() {
   const data = await api('/api/branches')
@@ -56,6 +59,21 @@ async function loadBranches() {
     { id_sucursal: 0, nombre: 'Casa Central', local: true },
     ...data.items,
   ]
+}
+
+function applyPatternToQuery(query) {
+  if (!activePattern.value) return
+  const { mode, nro_error, formulario, metodo } = activePattern.value
+
+  if ((mode === 'error' || mode === 'firma') && nro_error !== null && nro_error !== undefined) {
+    query.set('nro_error', String(nro_error))
+  }
+  if ((mode === 'formulario' || mode === 'firma') && formulario) {
+    query.set('formulario', formulario)
+  }
+  if ((mode === 'metodo' || mode === 'firma') && metodo) {
+    query.set('metodo', metodo)
+  }
 }
 
 async function loadDashboard() {
@@ -68,6 +86,7 @@ async function loadDashboard() {
       branch_id: String(branchId.value),
     })
     if (q.value.trim()) query.set('q', q.value.trim())
+    applyPatternToQuery(query)
 
     const branch = `branch_id=${branchId.value}`
     const [summaryData, errorsData, timelineData, topData, repeatedData] = await Promise.all([
@@ -168,13 +187,54 @@ function originName(item) {
   return branches.value.find((branch) => branch.id_sucursal === item.id_sucursal_origen)?.nombre || `Sucursal ${item.id_sucursal_origen}`
 }
 
-function search() { page.value = 1; loadDashboard() }
+async function filterByPattern(item) {
+  const pattern = {
+    mode: groupMode.value,
+    label: item.grupo,
+    nro_error: null,
+    formulario: '',
+    metodo: '',
+  }
+
+  if (groupMode.value === 'error') {
+    pattern.nro_error = Number(item.grupo)
+  } else if (groupMode.value === 'formulario') {
+    pattern.formulario = item.grupo === '(sin formulario)' ? '' : item.grupo
+  } else if (groupMode.value === 'metodo') {
+    pattern.metodo = item.grupo === '(sin método)' ? '' : item.grupo
+  } else if (groupMode.value === 'firma') {
+    const parts = String(item.grupo).split(' · ')
+    pattern.nro_error = parts[0] && parts[0] !== '-' ? Number(parts[0]) : null
+    pattern.formulario = parts[1] && parts[1] !== '(sin formulario)' ? parts[1] : ''
+    pattern.metodo = parts.slice(2).join(' · ')
+    if (pattern.metodo === '(sin método)') pattern.metodo = ''
+  }
+
+  activePattern.value = pattern
+  q.value = ''
+  page.value = 1
+  await loadDashboard()
+  await nextTick()
+  errorsPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+async function clearPattern() {
+  activePattern.value = null
+  page.value = 1
+  await loadDashboard()
+}
+
+function search() {
+  activePattern.value = null
+  page.value = 1
+  loadDashboard()
+}
 function previousPage() { if (page.value > 1) { page.value -= 1; loadDashboard() } }
 function nextPage() { if (page.value < errors.value.pages) { page.value += 1; loadDashboard() } }
 
 watch(days, () => { page.value = 1; loadDashboard() })
-watch(branchId, () => { page.value = 1; q.value = ''; syncMessage.value = ''; loadDashboard() })
-watch(groupMode, loadDashboard)
+watch(branchId, () => { page.value = 1; q.value = ''; activePattern.value = null; syncMessage.value = ''; loadDashboard() })
+watch(groupMode, () => { activePattern.value = null; loadDashboard() })
 
 onMounted(async () => {
   try {
@@ -254,7 +314,7 @@ onMounted(async () => {
       <div class="panel-title table-heading">
         <div>
           <h2>Patrones repetidos</h2>
-          <p>Detectá qué conviene corregir primero por frecuencia y alcance entre sucursales.</p>
+          <p>Hacé clic en un patrón para filtrar la tabla de errores de abajo.</p>
         </div>
         <select v-model="groupMode" aria-label="Agrupar errores repetidos">
           <option value="firma">Error + formulario + método</option>
@@ -275,7 +335,13 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in repeated" :key="`${groupMode}-${item.grupo}`">
+            <tr
+              v-for="item in repeated"
+              :key="`${groupMode}-${item.grupo}`"
+              class="pattern-row"
+              :class="{ selected: activePattern?.label === item.grupo && activePattern?.mode === groupMode }"
+              @click="filterByPattern(item)"
+            >
               <td><strong>{{ displayValue(item.grupo) }}</strong><small>{{ item.mensaje_ejemplo || '' }}</small></td>
               <td><span class="badge">{{ item.cantidad }}</span></td>
               <td>{{ item.sucursales }}</td>
@@ -288,9 +354,16 @@ onMounted(async () => {
       </div>
     </section>
 
-    <section class="panel">
+    <section ref="errorsPanel" class="panel errors-panel">
       <div class="panel-title table-heading">
-        <div><h2>Últimos errores · {{ currentBranchName }}</h2><p>{{ errors.total ?? 0 }} registros encontrados</p></div>
+        <div>
+          <h2>Últimos errores · {{ currentBranchName }}</h2>
+          <p>{{ errors.total ?? 0 }} registros encontrados</p>
+          <div v-if="activePattern" class="active-filter">
+            <span>Filtro desde patrones: <strong>{{ activePatternLabel }}</strong></span>
+            <button class="filter-clear" type="button" @click="clearPattern">Quitar filtro</button>
+          </div>
+        </div>
         <form class="search" @submit.prevent="search">
           <input v-model="q" type="search" placeholder="Buscar mensaje, método, objeto, código..." />
           <button>Buscar</button>
