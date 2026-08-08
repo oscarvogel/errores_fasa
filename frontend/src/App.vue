@@ -119,7 +119,7 @@ function renderCharts() {
 
 async function openError(item) {
   try {
-    selected.value = await api(`/api/errors/${item.id ?? item.ID ?? item.id_error ?? item.Id}`)
+    selected.value = await api(`/api/errors/${item._id}`)
   } catch {
     selected.value = item
   }
@@ -246,7 +246,7 @@ onMounted(loadDashboard)
             </tr>
           </thead>
           <tbody>
-            <tr v-for="item in errors.items" :key="item.id ?? item.fecha_hora" @click="openError(item)">
+            <tr v-for="item in errors.items" :key="item._id" @click="openError(item)">
               <td class="nowrap">{{ formatDate(item.fecha_hora) }}</td>
               <td><span class="badge">{{ displayValue(item.nro_error) }}</span></td>
               <td class="message-cell">{{ item.mensaje || item.nom_error }}</td>
@@ -276,7 +276,7 @@ onMounted(loadDashboard)
       <article class="modal">
         <header class="modal-header">
           <div>
-            <p class="eyebrow">Detalle de incidencia</p>
+            <p class="eyebrow">Detalle de incidencia #{{ selected._id }}</p>
             <h2>Error {{ selected.nro_error }}</h2>
           </div>
           <button class="icon-btn" @click="selected = null">×</button>
