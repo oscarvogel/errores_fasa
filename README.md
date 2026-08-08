@@ -9,94 +9,97 @@ Dashboard interno para consultar y analizar los errores registrados por Visual F
 - Docker Compose
 - Nginx dentro del contenedor web
 - Nginx del servidor como reverse proxy
-- MySQL existente de FASA con usuario de solo lectura
-- SQLite local persistente para cachear errores sincronizados desde sucursales
+- MySQL existente de FASA
 
 ## Puesta en marcha
 
-1. Clonar el repositorio.
-2. Copiar `.env.example` a `.env`.
-3. Completar `.env` con la conexión central y las credenciales de lectura de las sucursales.
-4. Ejecutar:
+1. Ejecutar primero la migración `sql/001_sync_sucursales.sql` en la base MySQL de Casa Central.
+2. Clonar o actualizar el repositorio.
+3. Copiar `.env.example` a `.env`.
+4. Completar `.env` con conexión central, usuario de sincronización y credenciales remotas.
+5. Ejecutar:
 
 ```bash
 docker compose up -d --build
 ```
 
-5. El stack queda escuchando solo en `127.0.0.1:8088` del servidor.
-6. Configurar el Nginx del host usando `deploy/nginx-host.conf.example`.
+6. El stack queda escuchando solo en `127.0.0.1:8088` del servidor.
 
-Verificación:
+## Cambio de estructura requerido
 
-```bash
-curl http://127.0.0.1:8088/api/health
+Los errores sincronizados desde sucursales se insertan directamente en `sys_errores` de Casa Central. El `id_error` local continúa siendo AUTO_INCREMENT; nunca se copia el `id_error` remoto como clave primaria.
+
+La migración agrega:
+
+```sql
+ALTER TABLE sys_errores
+    ADD COLUMN sincronizado TINYINT(1) NOT NULL DEFAULT 0 AFTER tablas_abiertas,
+    ADD COLUMN id_sucursal_origen INT NULL AFTER sincronizado,
+    ADD COLUMN id_error_origen INT NULL AFTER id_sucursal_origen,
+    ADD COLUMN fecha_sincronizacion DATETIME NULL AFTER id_error_origen,
+    ADD UNIQUE KEY uq_error_origen (id_sucursal_origen, id_error_origen),
+    ADD KEY idx_sucursal_origen (id_sucursal_origen),
+    ADD KEY idx_sincronizado (sincronizado),
+    ADD KEY idx_fecha_sincronizacion (fecha_sincronizacion);
 ```
 
-## Usuario MySQL central
+Semántica:
 
-El dashboard necesita leer `sys_errores` y `sucursales`:
+- error generado en Casa Central: `sincronizado = 0`, origen en `NULL`;
+- error importado: `sincronizado = 1`, `id_sucursal_origen` identifica la sucursal y `id_error_origen` conserva el ID original;
+- `(id_sucursal_origen, id_error_origen)` es único y evita duplicados;
+- `fecha_sincronizacion` indica cuándo se copió al servidor central.
+
+## Usuarios MySQL recomendados
+
+### Dashboard central: solo lectura
 
 ```sql
 CREATE USER 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD'
 IDENTIFIED BY 'UNA_CLAVE_SEGURA';
 
-GRANT SELECT ON fasa.sys_errores
-TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
-
-GRANT SELECT ON fasa.sucursales
-TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
-
-FLUSH PRIVILEGES;
+GRANT SELECT ON fasa.sys_errores TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
+GRANT SELECT ON fasa.sucursales TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
 ```
 
-No necesita `INSERT`, `UPDATE` ni `DELETE` sobre el MySQL central.
+### Sincronizador local: lectura + inserción
 
-## Sincronización manual de sucursales
+```sql
+CREATE USER 'error_sync'@'IP_DEL_SERVIDOR_DASHBOARD'
+IDENTIFIED BY 'OTRA_CLAVE_SEGURA';
 
-Las sucursales activas se leen desde la tabla central `sucursales`. Se utilizan:
-
-- `id_sucursal`
-- `nombre`
-- `servidor`
-- `puerto`
-- `Activo`
-
-El host y puerto se obtienen automáticamente de esa tabla. Usuario, contraseña y base remota se configuran en `.env`:
-
-```env
-REMOTE_DB_NAME=fasa
-REMOTE_DB_USER=error_dashboard
-REMOTE_DB_PASSWORD=clave_remota
-REMOTE_ERROR_TABLE=sys_errores
-REMOTE_CONNECT_TIMEOUT=8
-SYNC_BATCH_SIZE=1000
+GRANT SELECT, INSERT ON fasa.sys_errores TO 'error_sync'@'IP_DEL_SERVIDOR_DASHBOARD';
 ```
 
-El usuario remoto debe tener únicamente:
+El sincronizador no necesita `UPDATE`, `DELETE`, `ALTER` ni `DROP`.
+
+### Usuario de cada sucursal: solo lectura
 
 ```sql
 GRANT SELECT ON fasa.sys_errores
 TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
 ```
 
-En el dashboard aparece un selector de sucursal. Al elegir una sucursal remota aparece el botón **Sincronizar ahora**.
+## Sincronización manual de sucursales
 
-La sincronización:
+Las sucursales activas se leen desde la tabla central `sucursales`, usando `id_sucursal`, `nombre`, `servidor`, `puerto` y `Activo`.
 
-1. consulta el último `id_error` ya importado para esa sucursal;
-2. trae solamente errores posteriores;
-3. procesa todos los lotes pendientes en una sola ejecución;
-4. guarda los errores remotos en `/data/sync.db` dentro de un volumen Docker persistente;
-5. nunca escribe en el MySQL de la sucursal ni en el MySQL central;
-6. permite consultar los errores sincronizados aunque la sucursal luego quede desconectada.
+El botón **Sincronizar ahora** realiza:
 
-El volumen persistente está definido en `docker-compose.yml` como `error_sync_data`.
+1. obtiene el mayor `id_error_origen` ya guardado para la sucursal;
+2. conecta al MySQL remoto con usuario de solo lectura;
+3. trae solamente `sys_errores.id_error > ultimo_id`;
+4. inserta cada registro en `sys_errores` central con un nuevo `id_error` local;
+5. guarda `sincronizado = 1`, sucursal, ID remoto y fecha de sincronización;
+6. usa el índice único para impedir duplicados;
+7. no escribe nunca en la base MySQL remota.
 
-## Configuración principal
+## Configuración `.env`
 
 ```env
 APP_PORT=8088
 
+# Dashboard / lectura central
 DB_HOST=192.168.0.10
 DB_PORT=3306
 DB_NAME=fasa
@@ -104,20 +107,27 @@ DB_USER=error_dashboard
 DB_PASSWORD=clave_central
 DB_CHARSET=utf8mb4
 
+# Escritura controlada de registros sincronizados en Casa Central
+SYNC_DB_USER=error_sync
+SYNC_DB_PASSWORD=clave_sync
+
 ERROR_TABLE=sys_errores
 ERROR_ID_COLUMN=id_error
 BRANCHES_TABLE=sucursales
 
+# Lectura de sucursales remotas
 REMOTE_DB_NAME=fasa
 REMOTE_DB_USER=error_dashboard
 REMOTE_DB_PASSWORD=clave_remota
 REMOTE_DB_CHARSET=utf8mb4
 REMOTE_ERROR_TABLE=sys_errores
+REMOTE_CONNECT_TIMEOUT=8
+SYNC_BATCH_SIZE=1000
 
-SYNC_DB_PATH=/data/sync.db
+TZ=America/Argentina/Buenos_Aires
 ```
 
-Todas las credenciales se cargan desde `.env`. `.env` está ignorado por Git y no debe versionarse.
+Todas las credenciales se cargan desde `.env`; `.env` está ignorado por Git y no debe versionarse.
 
 ## Endpoints
 
