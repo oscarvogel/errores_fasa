@@ -9,67 +9,115 @@ Dashboard interno para consultar y analizar los errores registrados por Visual F
 - Docker Compose
 - Nginx dentro del contenedor web
 - Nginx del servidor como reverse proxy
-- MySQL existente de FASA, idealmente con usuario de solo lectura
+- MySQL existente de FASA con usuario de solo lectura
+- SQLite local persistente para cachear errores sincronizados desde sucursales
 
 ## Puesta en marcha
 
 1. Clonar el repositorio.
 2. Copiar `.env.example` a `.env`.
-3. Completar únicamente `.env` con la conexión real a MySQL.
+3. Completar `.env` con la conexión central y las credenciales de lectura de las sucursales.
 4. Ejecutar:
 
 ```bash
 docker compose up -d --build
 ```
 
-5. El stack queda escuchando solo en `127.0.0.1:8088` del servidor, para no exponerlo directamente a la red.
+5. El stack queda escuchando solo en `127.0.0.1:8088` del servidor.
 6. Configurar el Nginx del host usando `deploy/nginx-host.conf.example`.
 
-Para verificarlo directamente desde el servidor:
+Verificación:
 
 ```bash
 curl http://127.0.0.1:8088/api/health
 ```
 
-## Configuración
+## Usuario MySQL central
 
-Todas las credenciales y datos sensibles se leen desde `.env`. El archivo `.env` está ignorado por Git y **no debe versionarse**.
-
-Variables principales:
-
-```env
-DB_HOST=192.168.0.10
-DB_PORT=3306
-DB_NAME=fasa
-DB_USER=error_dashboard
-DB_PASSWORD=cambiar
-ERROR_TABLE=sys_errores
-ERROR_ID_COLUMN=id_error
-APP_PORT=8088
-```
-
-La estructura actual de FASA usa `id_error` como clave primaria de `sys_errores`.
-
-### Usuario MySQL recomendado
-
-Usar un usuario exclusivo de solo lectura:
+El dashboard necesita leer `sys_errores` y `sucursales`:
 
 ```sql
 CREATE USER 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD'
 IDENTIFIED BY 'UNA_CLAVE_SEGURA';
 
-GRANT SELECT
-ON fasa.sys_errores
+GRANT SELECT ON fasa.sys_errores
+TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
+
+GRANT SELECT ON fasa.sucursales
 TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
 
 FLUSH PRIVILEGES;
 ```
 
-## Tabla soportada
+No necesita `INSERT`, `UPDATE` ni `DELETE` sobre el MySQL central.
 
-El dashboard está preparado para la tabla actual `sys_errores`, incluyendo los campos de diagnóstico (`call_stack`, `codigo_fuente`, `tablas_abiertas`, `sql_state`, versiones, formulario/control) y también los campos de seguimiento ya existentes: `estado`, `resuelto_por`, `fecha_resol` y `solucion`.
+## Sincronización manual de sucursales
 
-La primera versión del dashboard es de consulta. Para permitir marcar errores como resueltos desde la web habrá que habilitar permisos de escritura específicos y endpoints separados; no se recomienda dar permisos amplios al usuario de lectura.
+Las sucursales activas se leen desde la tabla central `sucursales`. Se utilizan:
+
+- `id_sucursal`
+- `nombre`
+- `servidor`
+- `puerto`
+- `Activo`
+
+El host y puerto se obtienen automáticamente de esa tabla. Usuario, contraseña y base remota se configuran en `.env`:
+
+```env
+REMOTE_DB_NAME=fasa
+REMOTE_DB_USER=error_dashboard
+REMOTE_DB_PASSWORD=clave_remota
+REMOTE_ERROR_TABLE=sys_errores
+REMOTE_CONNECT_TIMEOUT=8
+SYNC_BATCH_SIZE=1000
+```
+
+El usuario remoto debe tener únicamente:
+
+```sql
+GRANT SELECT ON fasa.sys_errores
+TO 'error_dashboard'@'IP_DEL_SERVIDOR_DASHBOARD';
+```
+
+En el dashboard aparece un selector de sucursal. Al elegir una sucursal remota aparece el botón **Sincronizar ahora**.
+
+La sincronización:
+
+1. consulta el último `id_error` ya importado para esa sucursal;
+2. trae solamente errores posteriores;
+3. procesa todos los lotes pendientes en una sola ejecución;
+4. guarda los errores remotos en `/data/sync.db` dentro de un volumen Docker persistente;
+5. nunca escribe en el MySQL de la sucursal ni en el MySQL central;
+6. permite consultar los errores sincronizados aunque la sucursal luego quede desconectada.
+
+El volumen persistente está definido en `docker-compose.yml` como `error_sync_data`.
+
+## Configuración principal
+
+```env
+APP_PORT=8088
+
+DB_HOST=192.168.0.10
+DB_PORT=3306
+DB_NAME=fasa
+DB_USER=error_dashboard
+DB_PASSWORD=clave_central
+DB_CHARSET=utf8mb4
+
+ERROR_TABLE=sys_errores
+ERROR_ID_COLUMN=id_error
+BRANCHES_TABLE=sucursales
+
+REMOTE_DB_NAME=fasa
+REMOTE_DB_USER=error_dashboard
+REMOTE_DB_PASSWORD=clave_remota
+REMOTE_DB_CHARSET=utf8mb4
+REMOTE_ERROR_TABLE=sys_errores
+
+SYNC_DB_PATH=/data/sync.db
+```
+
+Todas las credenciales se cargan desde `.env`. `.env` está ignorado por Git y no debe versionarse.
 
 ## Endpoints
 
@@ -80,66 +128,21 @@ La primera versión del dashboard es de consulta. Para permitir marcar errores c
 - `GET /api/dashboard/timeline`
 - `GET /api/dashboard/top?field=nro_error`
 - `GET /api/dashboard/versions`
+- `GET /api/branches`
+- `POST /api/sync/{id_sucursal}`
+- `GET /api/branches/{id_sucursal}/errors`
 
 FastAPI expone documentación en `/api/docs`.
 
-## Filtros de errores
-
-`GET /api/errors` acepta:
-
-- `page`
-- `page_size`
-- `desde`
-- `hasta`
-- `nro_error`
-- `metodo`
-- `formulario`
-- `usuario`
-- `maquina`
-- `version`
-- `q` para búsqueda general
-
-Ejemplo:
-
-```text
-/api/errors?desde=2026-08-01&version=3.0.292&q=btnsalir
-```
-
-## Diagnóstico inicial
-
-Después del primer arranque ejecutar:
-
-```bash
-curl http://127.0.0.1:8088/api/health
-```
-
-Además de comprobar MySQL, devuelve las columnas detectadas y confirma si `ERROR_ID_COLUMN` existe.
-
-Ver logs:
+## Diagnóstico
 
 ```bash
 docker compose logs -f api
 docker compose logs -f web
 ```
 
-## Desarrollo local
-
-Backend:
+Para reconstruir después de un `git pull`:
 
 ```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+docker compose up -d --build
 ```
-
-Frontend:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Vite reenvía `/api` a `http://127.0.0.1:8000` durante desarrollo.
