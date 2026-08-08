@@ -7,6 +7,8 @@ services:
       - .env
     environment:
       TZ: ${TZ:-America/Argentina/Buenos_Aires}
+    volumes:
+      - error_sync_data:/data
     networks:
       - error_monitor
 
@@ -24,3 +26,6 @@ services:
 networks:
   error_monitor:
     driver: bridge
+
+volumes:
+  error_sync_data:
