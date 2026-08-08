@@ -61,6 +61,11 @@ td small { display: block; color: #94a3b8; margin-top: 3px; }
 .badge { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 8px; background: rgba(239,68,68,.13); border: 1px solid rgba(239,68,68,.25); color: #fca5a5; font-weight: 800; }
 .empty { text-align: center; padding: 28px; color: #94a3b8; }
 .pager { justify-content: flex-end; padding: 15px 18px; color: #94a3b8; font-size: .85rem; }
+.repeated-panel { margin-bottom: 18px; }
+.analysis-table { min-width: 900px; }
+.analysis-table td:first-child { max-width: 560px; }
+.analysis-table td:first-child strong { display: block; overflow-wrap: anywhere; }
+.analysis-table td:first-child small { max-width: 720px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(2,6,23,.82); backdrop-filter: blur(5px); }
 .modal { width: min(1050px, 100%); max-height: 92vh; overflow: auto; border: 1px solid #263449; border-radius: 18px; background: #0b1220; box-shadow: 0 30px 90px rgba(0,0,0,.55); }
